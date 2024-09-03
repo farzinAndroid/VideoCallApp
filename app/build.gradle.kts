@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
+    id ("com.google.devtools.ksp")
+    id ("com.google.dagger.hilt.android")
 }
 
 android {
@@ -40,7 +42,7 @@ android {
         compose = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1"
+        kotlinCompilerExtensionVersion = "1.5.5"
     }
     packaging {
         resources {
@@ -66,4 +68,23 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    // log
+    implementation(libs.timber)
+
+    //permission
+    implementation(libs.accompanist.permissions)
+
+    //webrtc
+    implementation(libs.webrtc.android.library)
+
+
+    //hilt di
+    implementation ("com.google.dagger:hilt-android:2.48.1")
+    ksp("com.google.dagger:hilt-compiler:2.48.1")
+    implementation ("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+
+    //compose navigation
+    implementation ("androidx.navigation:navigation-compose:2.7.7")
 }
