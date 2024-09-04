@@ -7,9 +7,10 @@ import androidx.navigation.NavController
 
 @Composable
 fun VideoCallScreen(
-    navController: NavController
+    navController: NavController,
+    roomId:String
 ) {
 
-    Text(text = "video call")
+    Text(text = "video call : $roomId")
 
 }
