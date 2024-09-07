@@ -20,6 +20,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import com.google.firebase.firestore.FirebaseFirestore
+import org.webrtc.DataChannel
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
+import org.webrtc.IceCandidate
+import org.webrtc.MediaStream
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnection.IceServer
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpReceiver
 import org.webrtc.SurfaceViewRenderer
 import timber.log.Timber
 
@@ -33,6 +43,103 @@ fun VideoCallScreen(
     val context = LocalContext.current
 
     val fireStore = remember { FirebaseFirestore.getInstance() }
+    val eglBase = remember { EglBase.create() }
+    var peerConnectionFactory: PeerConnectionFactory? = remember { null }
+    var peerConnector: PeerConnection? = remember { null }
+
+    fun initializeWebRtc() {
+        Timber.e("initializeWebRtc")
+
+        PeerConnectionFactory.initialize(
+            PeerConnectionFactory.InitializationOptions
+                .builder(context)
+                .setEnableInternalTracer(true)
+                .createInitializationOptions()
+        )
+
+        val videoEncoderFactory = DefaultVideoEncoderFactory(
+            eglBase.eglBaseContext,
+            true,
+            false
+        )
+
+        val videoDecoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+
+        peerConnectionFactory = PeerConnectionFactory
+            .builder()
+            .setVideoDecoderFactory(videoDecoderFactory)
+            .setVideoEncoderFactory(videoEncoderFactory)
+            .createPeerConnectionFactory()
+    }
+
+    fun createPeerConnection(){
+        Timber.e("createPeerConnection")
+
+
+        val iceServers = IceServer
+            .builder(listOf(
+                "stun:stun1.l.google.com:19302",
+                "stun:stun2.l.google.com:19302",
+            ))
+
+        val rtcConfig = PeerConnection.RTCConfiguration(listOf(iceServers.createIceServer()))
+
+        peerConnector = peerConnectionFactory?.createPeerConnection(
+            rtcConfig,
+            object : PeerConnection.Observer {
+                override fun onSignalingChange(p0: PeerConnection.SignalingState?) {
+
+                }
+
+                override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
+                    super.onConnectionChange(newState)
+                    Timber.e("onConnectionChange $newState")
+                }
+
+
+                override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {
+
+                }
+
+                override fun onIceConnectionReceivingChange(p0: Boolean) {
+
+                }
+
+                override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {
+
+                }
+
+                override fun onIceCandidate(p0: IceCandidate?) {
+
+                }
+
+                override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {
+
+                }
+
+                override fun onAddStream(p0: MediaStream?) {
+
+                }
+
+                override fun onRemoveStream(p0: MediaStream?) {
+
+                }
+
+                override fun onDataChannel(p0: DataChannel?) {
+
+                }
+
+                override fun onRenegotiationNeeded() {
+
+                }
+
+                override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
+
+                }
+
+            }
+        )
+    }
 
     fun checkRoomCapacityAndSetup(
         onNavigateBack: () -> Unit,
@@ -72,7 +179,9 @@ fun VideoCallScreen(
             onNavigateBack = {
                 navController.popBackStack()
             },
-            onProceed = {}
+            onProceed = {
+                initializeWebRtc()
+            }
         )
     }
 
