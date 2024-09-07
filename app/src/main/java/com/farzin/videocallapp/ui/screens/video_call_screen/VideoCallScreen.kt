@@ -29,11 +29,14 @@ import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnection.IceServer
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
 import org.webrtc.SurfaceViewRenderer
 import timber.log.Timber
 import java.util.concurrent.Executors
@@ -52,13 +55,18 @@ fun VideoCallScreen(
     val eglBase = remember { EglBase.create() }
     var peerConnectionFactory: PeerConnectionFactory? = remember { null }
     var peerConnection: PeerConnection? = remember { null }
-    var localCandidatesToShare = remember { arrayListOf<Map<String,Any?>>() }
+    var localCandidatesToShare = remember { arrayListOf<Map<String, Any?>>() }
     var queuedRemoteCandidates = remember { arrayListOf<IceCandidate>() }
+    val sdpMediaConstraints = remember {
+        MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", true.toString()))
+        }
+    }
 
     var isOfferer by remember { mutableStateOf(false) }
     var remoteDescriptionSet by remember { mutableStateOf(false) }
 
-    fun sendSignallingMessage(message: Map<String, Any?>){
+    fun sendSignallingMessage(message: Map<String, Any?>) {
         Timber.e("sendSignallingMessage $message")
 
         val signallingRef = fireStore.collection("rooms").document(roomId)
@@ -69,12 +77,12 @@ fun VideoCallScreen(
     fun handleSignallingMessages(data: Map<String, Any>) {
         //candidates
 
-        if (isOfferer && data["iceAnswer"] != null){
+        if (isOfferer && data["iceAnswer"] != null) {
 
             executor.execute {
                 val cmDataList = data["iceAnswer"] as List<*>
                 cmDataList.forEach {
-                    val cData = it as Map<*,*>
+                    val cData = it as Map<*, *>
 
                     val candidate = IceCandidate(
                         /* sdpMid = */ cData["sdpMid"] as String,
@@ -83,9 +91,9 @@ fun VideoCallScreen(
                     )
 
                     //remote description
-                    if (remoteDescriptionSet){
+                    if (remoteDescriptionSet) {
                         peerConnection?.addIceCandidate(candidate)
-                    }else{
+                    } else {
                         queuedRemoteCandidates.add(candidate)
                     }
                 }
@@ -101,12 +109,12 @@ fun VideoCallScreen(
 
         }
 
-        if (!isOfferer && data["iceOffer"] != null){
+        if (!isOfferer && data["iceOffer"] != null) {
 
             executor.execute {
                 val cmDataList = data["iceOffer"] as List<*>
                 cmDataList.forEach {
-                    val cData = it as Map<*,*>
+                    val cData = it as Map<*, *>
 
                     val candidate = IceCandidate(
                         /* sdpMid = */ cData["sdpMid"] as String,
@@ -115,9 +123,9 @@ fun VideoCallScreen(
                     )
 
                     //remote description
-                    if (remoteDescriptionSet){
+                    if (remoteDescriptionSet) {
                         peerConnection?.addIceCandidate(candidate)
-                    }else{
+                    } else {
                         queuedRemoteCandidates.add(candidate)
                     }
                 }
@@ -134,13 +142,13 @@ fun VideoCallScreen(
         }
     }
 
-    fun setupFirebaseListeners(){
+    fun setupFirebaseListeners() {
         Timber.e("setupFirebaseListeners")
 
         val signallingRef = fireStore.collection("rooms").document(roomId)
 
-        signallingRef.addSnapshotListener{value,error->
-            if (error != null){
+        signallingRef.addSnapshotListener { value, error ->
+            if (error != null) {
                 error.printStackTrace()
                 return@addSnapshotListener
             }
@@ -177,15 +185,17 @@ fun VideoCallScreen(
             .createPeerConnectionFactory()
     }
 
-    fun createPeerConnection(){
+    fun createPeerConnection() {
         Timber.e("createPeerConnection")
 
 
         val iceServers = IceServer
-            .builder(listOf(
-                "stun:stun1.l.google.com:19302",
-                "stun:stun2.l.google.com:19302",
-            ))
+            .builder(
+                listOf(
+                    "stun:stun1.l.google.com:19302",
+                    "stun:stun2.l.google.com:19302",
+                )
+            )
 
         val rtcConfig = PeerConnection.RTCConfiguration(listOf(iceServers.createIceServer()))
 
@@ -299,6 +309,71 @@ fun VideoCallScreen(
     }
 
 
+    var localSDP: SessionDescription? = remember { null }
+
+    val sdpObserver = object : SdpObserver {
+        override fun onCreateSuccess(sessionDescription: SessionDescription) {
+            Timber.d("onCreateSuccess")
+
+            if (localSDP != null) {
+                Timber.e("localSDP not null session created")
+                return
+            }
+
+            localSDP = sessionDescription
+
+            executor.execute {
+                peerConnection?.setLocalDescription(this, sessionDescription)
+            }
+        }
+
+        override fun onSetSuccess() {
+
+            if (localSDP == null) return
+
+
+            executor.execute {
+                if (isOfferer) {
+                    if (peerConnection?.remoteDescription == null) {
+                        // answer no yet received
+                        sendSignallingMessage(
+                            mapOf(
+                                "type" to "answer",
+                                "sdpAnswer" to localSDP?.description
+                            )
+                        )
+                    }else{
+                        remoteDescriptionSet = true
+                        addQueuedCandidates()
+                    }
+                }
+            }
+
+        }
+
+        private fun addQueuedCandidates() {
+            queuedRemoteCandidates.forEach {
+                peerConnection?.addIceCandidate(it)
+            }
+
+            queuedRemoteCandidates.clear()
+        }
+
+        override fun onCreateFailure(p0: String?) {
+        }
+
+        override fun onSetFailure(p0: String?) {
+        }
+
+    }
+
+    fun createOffer() {
+        Timber.e("create offer")
+        peerConnection?.createOffer(sdpObserver, sdpMediaConstraints)
+
+    }
+
+
     LaunchedEffect(true) {
         checkRoomCapacityAndSetup(
             onNavigateBack = {
@@ -308,7 +383,12 @@ fun VideoCallScreen(
                 executor.execute {
                     initializeWebRtc()
                     createPeerConnection()
+                    setupFirebaseListeners()
+                    if (isOfferer) {
+                        createOffer()
+                    }
                 }
+
             }
         )
     }
