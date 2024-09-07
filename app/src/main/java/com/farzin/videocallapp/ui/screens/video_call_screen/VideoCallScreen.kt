@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -352,7 +353,7 @@ fun VideoCallScreen(
                 }
 
                 override fun onAddStream(streams: MediaStream?) {
-                    Timber.d("onAddStream")
+                    Timber.e("onAddStream $streams")
                     streams?.videoTracks?.firstOrNull()?.addSink(remoteRenderer)
                 }
 
@@ -405,7 +406,7 @@ fun VideoCallScreen(
 
             }
             .addOnFailureListener {
-                Timber.e("Fire store error")
+                Timber.e("Fire store error ${it.message}")
                 Toast.makeText(context, "Firebase failed", Toast.LENGTH_SHORT).show()
                 onNavigateBack()
             }
@@ -440,7 +441,7 @@ fun VideoCallScreen(
 
     // local rendering
     fun initializeLocalMediaStream() {
-        Timber.d("initializeLocalMediaStream")
+        Timber.e("initializeLocalMediaStream")
 
         val videoSource = peerConnectionFactory?.createVideoSource(false)
         videoSource ?: run {
@@ -458,10 +459,10 @@ fun VideoCallScreen(
                 /* p2 = */ videoSource?.capturerObserver
             )
 
-            vc.startCapture(1280,720,30)
+            vc.startCapture(1280, 720, 30)
         }
 
-        val videoTrack = peerConnectionFactory?.createVideoTrack("1001",videoSource)
+        val videoTrack = peerConnectionFactory?.createVideoTrack("1001", videoSource)
         val mediaStream = peerConnectionFactory?.createLocalMediaStream("mediaStream")
         mediaStream?.addTrack(videoTrack)
         peerConnection?.addStream(mediaStream)
@@ -472,6 +473,11 @@ fun VideoCallScreen(
         Timber.e("create offer")
         peerConnection?.createOffer(sdpObserver, sdpMediaConstraints)
 
+    }
+
+    fun deleteFirestoreDoc(){
+        val signallingRef = fireStore.collection("rooms").document(roomId)
+        signallingRef.delete()
     }
 
 
@@ -494,6 +500,38 @@ fun VideoCallScreen(
             }
         )
     }
+
+
+    DisposableEffect(Unit) {
+        onDispose {
+            executor.execute {
+                localRenderer?.release()?.also {
+                    localRenderer = null
+                }
+
+                remoteRenderer?.release()?.also {
+                    remoteRenderer = null
+                }
+
+                peerConnection?.dispose().also {
+                    peerConnection = null
+                }
+                peerConnectionFactory?.dispose().also {
+                    peerConnectionFactory = null
+                }
+
+                eglBase.release()
+
+                PeerConnectionFactory.stopInternalTracingCapture()
+                PeerConnectionFactory.shutdownInternalTracer()
+
+                deleteFirestoreDoc()
+
+            }
+            executor.shutdown()
+        }
+    }
+
 
 
     Scaffold(
