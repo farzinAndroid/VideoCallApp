@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.app.NotificationCompat.MessagingStyle.Message
 import androidx.navigation.NavController
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
@@ -37,6 +36,7 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.SurfaceViewRenderer
 import timber.log.Timber
+import java.util.concurrent.Executors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,13 +47,16 @@ fun VideoCallScreen(
 
     val context = LocalContext.current
 
+    val executor = remember { Executors.newSingleThreadExecutor() }
     val fireStore = remember { FirebaseFirestore.getInstance() }
     val eglBase = remember { EglBase.create() }
     var peerConnectionFactory: PeerConnectionFactory? = remember { null }
-    var peerConnector: PeerConnection? = remember { null }
+    var peerConnection: PeerConnection? = remember { null }
     var localCandidatesToShare = remember { arrayListOf<Map<String,Any?>>() }
+    var queuedRemoteCandidates = remember { arrayListOf<IceCandidate>() }
 
     var isOfferer by remember { mutableStateOf(false) }
+    var remoteDescriptionSet by remember { mutableStateOf(false) }
 
     fun sendSignallingMessage(message: Map<String, Any?>){
         Timber.e("sendSignallingMessage $message")
@@ -63,8 +66,72 @@ fun VideoCallScreen(
         signallingRef.set(message, SetOptions.merge())
     }
 
-    fun handleSignallingMessages(data: Map<String, Any>?) {
+    fun handleSignallingMessages(data: Map<String, Any>) {
+        //candidates
 
+        if (isOfferer && data["iceAnswer"] != null){
+
+            executor.execute {
+                val cmDataList = data["iceAnswer"] as List<*>
+                cmDataList.forEach {
+                    val cData = it as Map<*,*>
+
+                    val candidate = IceCandidate(
+                        /* sdpMid = */ cData["sdpMid"] as String,
+                        /* sdpMLineIndex = */ (cData["sdpMLineIndex"] as Long).toInt(),
+                        /* sdp = */ cData["candidate"] as String
+                    )
+
+                    //remote description
+                    if (remoteDescriptionSet){
+                        peerConnection?.addIceCandidate(candidate)
+                    }else{
+                        queuedRemoteCandidates.add(candidate)
+                    }
+                }
+
+                // clear data
+                sendSignallingMessage(
+                    mapOf(
+                        "iceAnswer" to null
+                    )
+                )
+            }
+
+
+        }
+
+        if (!isOfferer && data["iceOffer"] != null){
+
+            executor.execute {
+                val cmDataList = data["iceOffer"] as List<*>
+                cmDataList.forEach {
+                    val cData = it as Map<*,*>
+
+                    val candidate = IceCandidate(
+                        /* sdpMid = */ cData["sdpMid"] as String,
+                        /* sdpMLineIndex = */ (cData["sdpMLineIndex"] as Long).toInt(),
+                        /* sdp = */ cData["candidate"] as String
+                    )
+
+                    //remote description
+                    if (remoteDescriptionSet){
+                        peerConnection?.addIceCandidate(candidate)
+                    }else{
+                        queuedRemoteCandidates.add(candidate)
+                    }
+                }
+
+                // clear data
+                sendSignallingMessage(
+                    mapOf(
+                        "iceOffer" to null
+                    )
+                )
+            }
+
+
+        }
     }
 
     fun setupFirebaseListeners(){
@@ -78,8 +145,8 @@ fun VideoCallScreen(
                 return@addSnapshotListener
             }
 
-            value?.let {
-                handleSignallingMessages(it.data)
+            value?.data?.let {
+                handleSignallingMessages(it)
             }
         }
 
@@ -122,7 +189,7 @@ fun VideoCallScreen(
 
         val rtcConfig = PeerConnection.RTCConfiguration(listOf(iceServers.createIceServer()))
 
-        peerConnector = peerConnectionFactory?.createPeerConnection(
+        peerConnection = peerConnectionFactory?.createPeerConnection(
             rtcConfig,
             object : PeerConnection.Observer {
                 override fun onSignalingChange(p0: PeerConnection.SignalingState?) {
@@ -238,7 +305,10 @@ fun VideoCallScreen(
                 navController.popBackStack()
             },
             onProceed = {
-                initializeWebRtc()
+                executor.execute {
+                    initializeWebRtc()
+                    createPeerConnection()
+                }
             }
         )
     }
