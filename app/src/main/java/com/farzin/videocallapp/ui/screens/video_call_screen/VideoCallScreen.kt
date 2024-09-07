@@ -13,13 +13,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.NotificationCompat.MessagingStyle.Message
 import androidx.navigation.NavController
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -46,6 +51,39 @@ fun VideoCallScreen(
     val eglBase = remember { EglBase.create() }
     var peerConnectionFactory: PeerConnectionFactory? = remember { null }
     var peerConnector: PeerConnection? = remember { null }
+    var localCandidatesToShare = remember { arrayListOf<Map<String,Any?>>() }
+
+    var isOfferer by remember { mutableStateOf(false) }
+
+    fun sendSignallingMessage(message: Map<String, Any?>){
+        Timber.e("sendSignallingMessage $message")
+
+        val signallingRef = fireStore.collection("rooms").document(roomId)
+
+        signallingRef.set(message, SetOptions.merge())
+    }
+
+    fun handleSignallingMessages(data: Map<String, Any>?) {
+
+    }
+
+    fun setupFirebaseListeners(){
+        Timber.e("setupFirebaseListeners")
+
+        val signallingRef = fireStore.collection("rooms").document(roomId)
+
+        signallingRef.addSnapshotListener{value,error->
+            if (error != null){
+                error.printStackTrace()
+                return@addSnapshotListener
+            }
+
+            value?.let {
+                handleSignallingMessages(it.data)
+            }
+        }
+
+    }
 
     fun initializeWebRtc() {
         Timber.e("initializeWebRtc")
@@ -109,7 +147,24 @@ fun VideoCallScreen(
 
                 }
 
-                override fun onIceCandidate(p0: IceCandidate?) {
+                override fun onIceCandidate(candidate: IceCandidate?) {
+
+                    val key = if (isOfferer) "iceOffer" else "iceAnswer"
+
+                    candidate?.let {
+                        localCandidatesToShare.add(
+                            mapOf(
+                                "candidate" to it.sdp,
+                                "sdpMid" to it.sdpMid,
+                                "sdpMLineIndex" to it.sdpMLineIndex
+                            )
+                        )
+                    }
+
+                    // send to signalling server (firebase)
+                    sendSignallingMessage(
+                        mapOf(key to localCandidatesToShare)
+                    )
 
                 }
 
@@ -145,7 +200,7 @@ fun VideoCallScreen(
         onNavigateBack: () -> Unit,
         onProceed: () -> Unit,
     ) {
-        val roomRefID = fireStore.collection("Rooms").document(roomId)
+        val roomRefID = fireStore.collection("rooms").document(roomId)
 
         roomRefID.get()
             .addOnSuccessListener { document ->
@@ -158,11 +213,14 @@ fun VideoCallScreen(
                         onNavigateBack()
                     } else {
                         roomRefID.update("participantCount", participantCount + 1)
+                        onProceed()
                     }
 
 
                 } else {
                     roomRefID.set(mapOf("participantCount" to 1))
+                    isOfferer = true
+                    onProceed()
                 }
 
             }
