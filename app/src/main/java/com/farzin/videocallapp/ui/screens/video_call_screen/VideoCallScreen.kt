@@ -74,6 +74,79 @@ fun VideoCallScreen(
         signallingRef.set(message, SetOptions.merge())
     }
 
+    var localSDP: SessionDescription? = remember { null }
+
+    val sdpObserver = object : SdpObserver {
+        override fun onCreateSuccess(sessionDescription: SessionDescription) {
+            Timber.d("onCreateSuccess")
+
+            if (localSDP != null) {
+                Timber.e("localSDP not null session created")
+                return
+            }
+
+            localSDP = sessionDescription
+
+            executor.execute {
+                peerConnection?.setLocalDescription(this, sessionDescription)
+            }
+        }
+
+        override fun onSetSuccess() {
+
+            if (localSDP == null) return
+
+
+            executor.execute {
+                if (isOfferer) {
+                    if (peerConnection?.remoteDescription == null) {
+                        // answer no yet received
+                        sendSignallingMessage(
+                            mapOf(
+                                "type" to "offer",
+                                "sdpOffer" to localSDP?.description
+                            )
+                        )
+                    }else{
+                        remoteDescriptionSet = true
+                        addQueuedCandidates()
+                    }
+                }else{
+                    if (peerConnection?.localDescription != null){
+                        sendSignallingMessage(
+                            mapOf(
+                                "type" to "answer",
+                                "sdpAnswer" to localSDP?.description
+                            )
+                        )
+                        remoteDescriptionSet = true
+                        addQueuedCandidates()
+                    }
+                }
+            }
+
+        }
+
+        private fun addQueuedCandidates() {
+            queuedRemoteCandidates.forEach {
+                peerConnection?.addIceCandidate(it)
+            }
+
+            queuedRemoteCandidates.clear()
+        }
+
+        override fun onCreateFailure(p0: String?) {
+        }
+
+        override fun onSetFailure(p0: String?) {
+        }
+
+    }
+
+    fun createAnswer(){
+        peerConnection?.createAnswer(sdpObserver,sdpMediaConstraints)
+    }
+
     fun handleSignallingMessages(data: Map<String, Any>) {
         //candidates
 
@@ -139,6 +212,26 @@ fun VideoCallScreen(
             }
 
 
+        }
+
+        if (!isOfferer && data["sdpOffer"] != null) {
+            executor.execute {
+                val offerSDP = data["sdpOffer"] as String
+                val offer = SessionDescription(SessionDescription.Type.OFFER,offerSDP)
+                sendSignallingMessage(mapOf("sdpOffer" to null))
+
+                peerConnection?.setRemoteDescription(sdpObserver,offer)
+                createAnswer()
+            }
+        }
+
+        if (isOfferer && data["sdpAnswer"] != null){
+            executor.execute {
+                val answerSdp = data["sdpAnswer"] as String
+                val answer = SessionDescription(SessionDescription.Type.ANSWER,answerSdp)
+                sendSignallingMessage(mapOf("sdpAnswer" to null))
+                peerConnection?.setRemoteDescription(sdpObserver,answer)
+            }
         }
     }
 
@@ -309,63 +402,9 @@ fun VideoCallScreen(
     }
 
 
-    var localSDP: SessionDescription? = remember { null }
-
-    val sdpObserver = object : SdpObserver {
-        override fun onCreateSuccess(sessionDescription: SessionDescription) {
-            Timber.d("onCreateSuccess")
-
-            if (localSDP != null) {
-                Timber.e("localSDP not null session created")
-                return
-            }
-
-            localSDP = sessionDescription
-
-            executor.execute {
-                peerConnection?.setLocalDescription(this, sessionDescription)
-            }
-        }
-
-        override fun onSetSuccess() {
-
-            if (localSDP == null) return
 
 
-            executor.execute {
-                if (isOfferer) {
-                    if (peerConnection?.remoteDescription == null) {
-                        // answer no yet received
-                        sendSignallingMessage(
-                            mapOf(
-                                "type" to "answer",
-                                "sdpAnswer" to localSDP?.description
-                            )
-                        )
-                    }else{
-                        remoteDescriptionSet = true
-                        addQueuedCandidates()
-                    }
-                }
-            }
 
-        }
-
-        private fun addQueuedCandidates() {
-            queuedRemoteCandidates.forEach {
-                peerConnection?.addIceCandidate(it)
-            }
-
-            queuedRemoteCandidates.clear()
-        }
-
-        override fun onCreateFailure(p0: String?) {
-        }
-
-        override fun onSetFailure(p0: String?) {
-        }
-
-    }
 
     fun createOffer() {
         Timber.e("create offer")
