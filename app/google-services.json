@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "797081220889",
+    "project_id": "videocallapp-72233",
+    "storage_bucket": "videocallapp-72233.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797081220889:android:ab4827ed576271c2207788",
+        "android_client_info": {
+          "package_name": "com.farzin.videocallapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1eQL5gDQ9x0AEsmi8nukE2N13a9tSdc4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

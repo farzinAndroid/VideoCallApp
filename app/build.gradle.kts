@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.android)
     id ("com.google.devtools.ksp")
     id ("com.google.dagger.hilt.android")
+    alias(libs.plugins.gms.services)
 }
 
 android {
@@ -87,4 +88,7 @@ dependencies {
 
     //compose navigation
     implementation ("androidx.navigation:navigation-compose:2.7.7")
+
+    //firebase
+    implementation("com.google.firebase:firebase-firestore-ktx:25.1.0")
 }
