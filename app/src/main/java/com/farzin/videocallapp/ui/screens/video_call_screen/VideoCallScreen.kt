@@ -24,6 +24,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraVideoCapturer
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -34,9 +36,11 @@ import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnection.IceServer
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RendererCommon
 import org.webrtc.RtpReceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import timber.log.Timber
 import java.util.concurrent.Executors
@@ -65,6 +69,11 @@ fun VideoCallScreen(
 
     var isOfferer by remember { mutableStateOf(false) }
     var remoteDescriptionSet by remember { mutableStateOf(false) }
+
+
+    // renderers
+    var localRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+    var remoteRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
     fun sendSignallingMessage(message: Map<String, Any?>) {
         Timber.e("sendSignallingMessage $message")
@@ -107,12 +116,12 @@ fun VideoCallScreen(
                                 "sdpOffer" to localSDP?.description
                             )
                         )
-                    }else{
+                    } else {
                         remoteDescriptionSet = true
                         addQueuedCandidates()
                     }
-                }else{
-                    if (peerConnection?.localDescription != null){
+                } else {
+                    if (peerConnection?.localDescription != null) {
                         sendSignallingMessage(
                             mapOf(
                                 "type" to "answer",
@@ -143,8 +152,8 @@ fun VideoCallScreen(
 
     }
 
-    fun createAnswer(){
-        peerConnection?.createAnswer(sdpObserver,sdpMediaConstraints)
+    fun createAnswer() {
+        peerConnection?.createAnswer(sdpObserver, sdpMediaConstraints)
     }
 
     fun handleSignallingMessages(data: Map<String, Any>) {
@@ -217,20 +226,20 @@ fun VideoCallScreen(
         if (!isOfferer && data["sdpOffer"] != null) {
             executor.execute {
                 val offerSDP = data["sdpOffer"] as String
-                val offer = SessionDescription(SessionDescription.Type.OFFER,offerSDP)
+                val offer = SessionDescription(SessionDescription.Type.OFFER, offerSDP)
                 sendSignallingMessage(mapOf("sdpOffer" to null))
 
-                peerConnection?.setRemoteDescription(sdpObserver,offer)
+                peerConnection?.setRemoteDescription(sdpObserver, offer)
                 createAnswer()
             }
         }
 
-        if (isOfferer && data["sdpAnswer"] != null){
+        if (isOfferer && data["sdpAnswer"] != null) {
             executor.execute {
                 val answerSdp = data["sdpAnswer"] as String
-                val answer = SessionDescription(SessionDescription.Type.ANSWER,answerSdp)
+                val answer = SessionDescription(SessionDescription.Type.ANSWER, answerSdp)
                 sendSignallingMessage(mapOf("sdpAnswer" to null))
-                peerConnection?.setRemoteDescription(sdpObserver,answer)
+                peerConnection?.setRemoteDescription(sdpObserver, answer)
             }
         }
     }
@@ -342,8 +351,9 @@ fun VideoCallScreen(
 
                 }
 
-                override fun onAddStream(p0: MediaStream?) {
-
+                override fun onAddStream(streams: MediaStream?) {
+                    Timber.d("onAddStream")
+                    streams?.videoTracks?.firstOrNull()?.addSink(remoteRenderer)
                 }
 
                 override fun onRemoveStream(p0: MediaStream?) {
@@ -402,9 +412,61 @@ fun VideoCallScreen(
     }
 
 
+    fun createCameraCapturer(): CameraVideoCapturer? {
+        val cameraEnumerator = Camera2Enumerator(context)
+        val deviceNames = cameraEnumerator.deviceNames
+
+        for (deviceName in deviceNames) {
+            if (cameraEnumerator.isFrontFacing(deviceName)) {
+                val videoCapturer = cameraEnumerator.createCapturer(deviceName, null)
+                if (videoCapturer != null) {
+                    return videoCapturer
+                }
+            }
+        }
+
+        for (deviceName in deviceNames) {
+            if (!cameraEnumerator.isFrontFacing(deviceName)) {
+                val videoCapturer = cameraEnumerator.createCapturer(deviceName, null)
+                if (videoCapturer != null) {
+                    return videoCapturer
+                }
+            }
+        }
+
+        return null
+    }
 
 
+    // local rendering
+    fun initializeLocalMediaStream() {
+        Timber.d("initializeLocalMediaStream")
 
+        val videoSource = peerConnectionFactory?.createVideoSource(false)
+        videoSource ?: run {
+            Timber.e("videoSource is null")
+        }
+
+        val videoCapturer = createCameraCapturer()
+
+        videoCapturer?.let { vc ->
+            vc.initialize(
+                /* p0 = */ SurfaceTextureHelper.create(
+                    /* threadName = */ "CaptureThread",/* sharedContext = */eglBase.eglBaseContext
+                ),
+                /* p1 = */ context,
+                /* p2 = */ videoSource?.capturerObserver
+            )
+
+            vc.startCapture(1280,720,30)
+        }
+
+        val videoTrack = peerConnectionFactory?.createVideoTrack("1001",videoSource)
+        val mediaStream = peerConnectionFactory?.createLocalMediaStream("mediaStream")
+        mediaStream?.addTrack(videoTrack)
+        peerConnection?.addStream(mediaStream)
+        videoTrack?.addSink(localRenderer)
+    }
 
     fun createOffer() {
         Timber.e("create offer")
@@ -422,6 +484,7 @@ fun VideoCallScreen(
                 executor.execute {
                     initializeWebRtc()
                     createPeerConnection()
+                    initializeLocalMediaStream()
                     setupFirebaseListeners()
                     if (isOfferer) {
                         createOffer()
@@ -457,7 +520,12 @@ fun VideoCallScreen(
                 AndroidView(
                     factory = { context ->
                         SurfaceViewRenderer(context).apply {
-
+                            init(
+                                /* sharedContext = */ eglBase.eglBaseContext,
+                                /* rendererEvents = */ null
+                            )
+                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                            localRenderer = this
                         }
                     },
                     modifier = Modifier
@@ -468,7 +536,12 @@ fun VideoCallScreen(
                 AndroidView(
                     factory = { context ->
                         SurfaceViewRenderer(context).apply {
-
+                            init(
+                                /* sharedContext = */ eglBase.eglBaseContext,
+                                /* rendererEvents = */ null
+                            )
+                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                            remoteRenderer = this
                         }
                     },
                     modifier = Modifier
